@@ -1,0 +1,536 @@
+  
+#ifndef CARGO_TRACKING_H
+#define CARGO_TRACKING_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+typedef enum {
+    PROCESSING,
+    IN_TRANSIT,
+    DELIVERED
+} CargoStatus;
+
+typedef struct Shipment {
+    int shipmentId;
+    time_t shipmentDate;
+    int isDelivered;
+    int deliveryTime;
+    struct Shipment* next;
+} Shipment;
+
+typedef struct Customer {
+    int customerId;
+    char firstName[50];
+    char lastName[50];
+    Shipment* shipmentHistory;
+    struct Customer* next;
+} Customer;
+
+typedef struct CityNode {
+    int cityId;
+    char cityName[50];
+    struct CityNode** children;
+    int numChildren;
+} CityNode;
+
+typedef struct PQNode {
+    int shipmentId;
+    int deliveryTime;
+    CargoStatus status;
+    struct PQNode* next;
+} PQNode;
+
+Customer* addCustomer(Customer* head, int customerId, const char* firstName, const char* lastName);
+void addShipment(Customer* customer, int shipmentId, time_t shipmentDate, int deliveryTime);
+void displayShipmentHistory(Customer* customer);
+
+PQNode* addCargo(PQNode* head, int shipmentId, int deliveryTime, CargoStatus status);
+PQNode* getHighestPriority(PQNode** head);
+
+CityNode* createCityNode(int cityId, const char* cityName);
+void addRoute(CityNode* parent, CityNode* child);
+int calculateDeliveryTime(CityNode* root, int targetCityId);
+
+void pushShipment(Shipment** top, int shipmentId, time_t shipmentDate, int deliveryTime);
+void displayRecentShipments(Shipment* top, int count);
+
+void sortShipments(Shipment* shipments, int count);
+Shipment* searchShipment(Shipment* shipments, int shipmentId, int count);
+
+#endif 
+
+Customer* addCustomer(Customer* head, int customerId, const char* firstName, const char* lastName) {
+    Customer* newCustomer = (Customer*)malloc(sizeof(Customer));
+    if (!newCustomer) return NULL;
+
+    newCustomer->customerId = customerId;
+    strncpy(newCustomer->firstName, firstName, 49);
+    strncpy(newCustomer->lastName, lastName, 49);
+    newCustomer->shipmentHistory = NULL;
+    newCustomer->next = NULL;
+
+    if (!head) return newCustomer;
+
+    Customer* current = head;
+    while (current->next) {
+        current = current->next;
+    }
+    current->next = newCustomer;
+    return head;
+}
+
+void addShipment(Customer* customer, int shipmentId, time_t shipmentDate, int deliveryTime) {
+    if (!customer) return;
+
+    Shipment* newShipment = (Shipment*)malloc(sizeof(Shipment));
+    if (!newShipment) return;
+
+    newShipment->shipmentId = shipmentId;
+    newShipment->shipmentDate = shipmentDate;
+    newShipment->isDelivered = 0;
+    newShipment->deliveryTime = deliveryTime;
+    newShipment->next = NULL;
+
+    if (!customer->shipmentHistory || 
+        difftime(customer->shipmentHistory->shipmentDate, shipmentDate) > 0) {
+        newShipment->next = customer->shipmentHistory;
+        customer->shipmentHistory = newShipment;
+        return;
+    }
+
+    Shipment* current = customer->shipmentHistory;
+    while (current->next && difftime(shipmentDate, current->next->shipmentDate) > 0) {
+        current = current->next;
+    }
+    newShipment->next = current->next;
+    current->next = newShipment;
+}
+void displayShipmentHistory(Customer* customer) {
+    if (!customer || !customer->shipmentHistory) {
+        printf("No shipment history available.\n");
+        return;
+    }
+
+    printf("Shipment History for %s %s:\n", customer->firstName, customer->lastName);
+    Shipment* current = customer->shipmentHistory;
+
+    while (current) {
+        char dateStr[26];
+        ctime_r(&current->shipmentDate, dateStr);
+        dateStr[24] = '\0';  // Remove newline
+
+        printf("Shipment ID: %d\n", current->shipmentId);
+        printf("Date: %s\n", dateStr);
+        printf("Delivery Time: %d days\n", current->deliveryTime);
+        printf("Status: %s\n\n", current->isDelivered ? "Delivered" : "Not Delivered");
+
+        current = current->next;
+    }
+}
+
+PQNode* addCargo(PQNode* head, int shipmentId, int deliveryTime, CargoStatus status) {
+    PQNode* newNode = (PQNode*)malloc(sizeof(PQNode));
+    if (!newNode) return head;
+
+    newNode->shipmentId = shipmentId;
+    newNode->deliveryTime = deliveryTime;
+    newNode->status = status;
+    newNode->next = NULL;
+
+    if (!head || deliveryTime < head->deliveryTime) {
+        newNode->next = head;
+        return newNode;
+    }
+
+    PQNode* current = head;
+    while (current->next && current->next->deliveryTime <= deliveryTime) {
+        current = current->next;
+    }
+
+    newNode->next = current->next;
+    current->next = newNode;
+    return head;
+}
+
+PQNode* getHighestPriority(PQNode** head) {
+    if (!*head) return NULL;
+
+    PQNode* highestPriority = *head;
+    *head = (*head)->next;
+    highestPriority->next = NULL;
+    return highestPriority;
+}
+
+CityNode* createCityNode(int cityId, const char* cityName) {
+    CityNode* newNode = (CityNode*)malloc(sizeof(CityNode));
+    if (!newNode) return NULL;
+
+    newNode->cityId = cityId;
+    strncpy(newNode->cityName, cityName, 49);
+    newNode->children = NULL;
+    newNode->numChildren = 0;
+    return newNode;
+}
+
+void addRoute(CityNode* parent, CityNode* child) {
+    if (!parent || !child) return;
+
+    parent->numChildren++;
+    parent->children = realloc(parent->children, 
+                             parent->numChildren * sizeof(CityNode*));
+    if (!parent->children) {
+        parent->numChildren = 0;
+        return;
+    }
+    parent->children[parent->numChildren - 1] = child;
+}
+
+static int findCityDepth(CityNode* root, int targetCityId, int depth) {
+    if (!root) return -1;
+    if (root->cityId == targetCityId) return depth;
+
+    for (int i = 0; i < root->numChildren; i++) {
+        int result = findCityDepth(root->children[i], targetCityId, depth + 1);
+        if (result != -1) return result;
+    }
+    return -1;
+}
+
+int calculateDeliveryTime(CityNode* root, int targetCityId) {
+    return findCityDepth(root, targetCityId, 0);
+}
+
+void printRoutingTree(CityNode* root, int level) {
+    if (!root) return;
+
+    for (int i = 0; i < level; i++) {
+        printf("  ");
+    }
+    printf("|-- %s (ID: %d)\n", root->cityName, root->cityId);
+
+    for (int i = 0; i < root->numChildren; i++) {
+        printRoutingTree(root->children[i], level + 1);
+    }
+}
+
+void pushShipment(Shipment** top, int shipmentId, time_t shipmentDate, int deliveryTime) {
+    Shipment* newShipment = (Shipment*)malloc(sizeof(Shipment));
+    if (!newShipment) return;
+
+    newShipment->shipmentId = shipmentId;
+    newShipment->shipmentDate = shipmentDate;
+    newShipment->deliveryTime = deliveryTime;
+    newShipment->isDelivered = 0;
+    
+    newShipment->next = *top;
+    *top = newShipment;
+}
+
+void displayRecentShipments(Shipment* top, int count) {
+    if (!top) {
+        printf("No shipment history available.\n");
+        return;
+    }
+
+    printf("Recent %d shipments:\n", count);
+    Shipment* current = top;
+    int displayed = 0;
+
+    while (current && displayed < count) {
+        char dateStr[26];
+        ctime_r(&current->shipmentDate, dateStr);
+        dateStr[24] = '\0';  
+
+        printf("Shipment ID: %d\n", current->shipmentId);
+        printf("Date: %s\n", dateStr);
+        printf("Delivery Time: %d days\n", current->deliveryTime);
+        printf("Status: %s\n\n", current->isDelivered ? "Delivered" : "Not Delivered");
+
+        current = current->next;
+        displayed++;
+    }
+}
+
+static void merge(Shipment arr[], int left, int mid, int right) {
+    int i, j, k;
+    int n1 = mid - left + 1;
+    int n2 = right - mid;
+
+    Shipment* L = malloc(n1 * sizeof(Shipment));
+    Shipment* R = malloc(n2 * sizeof(Shipment));
+
+    for (i = 0; i < n1; i++)
+        L[i] = arr[left + i];
+    for (j = 0; j < n2; j++)
+        R[j] = arr[mid + 1 + j];
+
+    i = 0;
+    j = 0;
+    k = left;
+
+    while (i < n1 && j < n2) {
+        if (L[i].deliveryTime <= R[j].deliveryTime) {
+            arr[k] = L[i];
+            i++;
+        } else {
+            arr[k] = R[j];
+            j++;
+        }
+        k++;
+    }
+
+    while (i < n1) {
+        arr[k] = L[i];
+        i++;
+        k++;
+    }
+
+    while (j < n2) {
+        arr[k] = R[j];
+        j++;
+        k++;
+    }
+
+    free(L);
+    free(R);
+}
+
+static void mergeSort(Shipment arr[], int left, int right) {
+    if (left < right) {
+        int mid = left + (right - left) / 2;
+        mergeSort(arr, left, mid);
+        mergeSort(arr, mid + 1, right);
+        merge(arr, left, mid, right);
+    }
+}
+
+void sortShipments(Shipment* shipments, int count) {
+    mergeSort(shipments, 0, count - 1);
+}
+
+Shipment* searchShipment(Shipment* shipments, int shipmentId, int count) {
+    int left = 0;
+    int right = count - 1;
+
+    while (left <= right) {
+        int mid = left + (right - left) / 2;
+
+        if (shipments[mid].shipmentId == shipmentId)
+            return &shipments[mid];
+
+        if (shipments[mid].shipmentId < shipmentId)
+            left = mid + 1;
+        else
+            right = mid - 1;
+    }
+
+    return NULL;
+}
+
+void clearScreen() {
+    printf("\n\n");  
+}
+
+void waitForEnter() {
+    printf("\nPress Enter to continue...");
+    while (getchar() != '\n');  
+}
+
+void displayMenu() {
+    printf("\n=== Cargo Tracking System ===\n");
+    printf("1. Add new customer\n");
+    printf("2. Add cargo shipment\n");
+    printf("3. Check cargo status\n");
+    printf("4. View shipment history\n");
+    printf("5. List all shipments (sorted)\n");
+    printf("6. Show delivery routes\n");
+    printf("0. Exit\n");
+    printf("Enter your choice: ");
+}
+
+Customer* findCustomer(Customer* head, int customerId) {
+    Customer* current = head;
+    while (current != NULL) {
+        if (current->customerId == customerId) {
+            return current;
+        }
+        current = current->next;
+    }
+    return NULL;
+}
+
+int main() {
+    Customer* customerList = NULL;
+    PQNode* cargoQueue = NULL;
+    CityNode* headquarters = createCityNode(1, "HQ");
+    
+    CityNode* city1 = createCityNode(2, "New York");
+    CityNode* city2 = createCityNode(3, "Los Angeles");
+    addRoute(headquarters, city1);
+    addRoute(headquarters, city2);
+
+    int choice;
+    do {
+        clearScreen();
+        displayMenu();
+        scanf("%d", &choice);
+        getchar(); 
+
+        switch (choice) {
+            case 1: {
+                clearScreen();
+                printf("=== Add New Customer ===\n");
+                int customerId;
+                char firstName[50], lastName[50];
+                
+                printf("Enter Customer ID: ");
+                scanf("%d", &customerId);
+                getchar();
+                
+                printf("Enter First Name: ");
+                fgets(firstName, 49, stdin);
+                firstName[strcspn(firstName, "\n")] = 0;
+                
+                printf("Enter Last Name: ");
+                fgets(lastName, 49, stdin);
+                lastName[strcspn(lastName, "\n")] = 0;
+
+                customerList = addCustomer(customerList, customerId, firstName, lastName);
+                printf("\nCustomer added successfully!");
+                waitForEnter();
+                break;
+            }
+            case 2: {
+                clearScreen();
+                printf("=== Add Cargo Shipment ===\n");
+                int customerId, shipmentId, deliveryTime;
+                
+                printf("Enter Customer ID: ");
+                scanf("%d", &customerId);
+                
+                Customer* customer = findCustomer(customerList, customerId);
+                if (!customer) {
+                    printf("\nCustomer not found!");
+                    waitForEnter();
+                    break;
+                }
+
+                printf("Enter Shipment ID: ");
+                scanf("%d", &shipmentId);
+                printf("Enter Delivery Time (days): ");
+                scanf("%d", &deliveryTime);
+
+                addShipment(customer, shipmentId, time(NULL), deliveryTime);
+                cargoQueue = addCargo(cargoQueue, shipmentId, deliveryTime, PROCESSING);
+                
+                printf("\nShipment added successfully!");
+                waitForEnter();
+                break;
+            }
+            case 3: {
+                clearScreen();
+                printf("=== Check Cargo Status ===\n");
+                if (!cargoQueue) {
+                    printf("No cargo in the system.\n");
+                } else {
+                    PQNode* current = cargoQueue;
+                    while (current) {
+                        printf("Shipment ID: %d\n", current->shipmentId);
+                        printf("Delivery Time: %d days\n", current->deliveryTime);
+                        printf("Status: ");
+                        switch (current->status) {
+                            case PROCESSING: printf("Processing\n"); break;
+                            case IN_TRANSIT: printf("In Transit\n"); break;
+                            case DELIVERED: printf("Delivered\n"); break;
+                        }
+                        printf("\n");
+                        current = current->next;
+                    }
+                }
+                waitForEnter();
+                break;
+            }
+            case 4: {
+                clearScreen();
+                printf("=== View Shipment History ===\n");
+                int customerId;
+                printf("Enter Customer ID: ");
+                scanf("%d", &customerId);
+
+                Customer* customer = findCustomer(customerList, customerId);
+                if (customer) {
+                    displayShipmentHistory(customer);
+                } else {
+                    printf("\nCustomer not found!");
+                }
+                waitForEnter();
+                break;
+            }
+            case 5: {
+                clearScreen();
+                printf("=== List All Shipments (Sorted) ===\n");
+                Shipment* allShipments = NULL;
+                int count = 0;
+                
+                Customer* current = customerList;
+                while (current) {
+                    Shipment* shipment = current->shipmentHistory;
+                    while (shipment) {
+                        count++;
+                        shipment = shipment->next;
+                    }
+                    current = current->next;
+                }
+
+                if (count > 0) {
+                    allShipments = malloc(count * sizeof(Shipment));
+                    int index = 0;
+                    current = customerList;
+                    while (current) {
+                        Shipment* shipment = current->shipmentHistory;
+                        while (shipment) {
+                            allShipments[index++] = *shipment;
+                            shipment = shipment->next;
+                        }
+                        current = current->next;
+                    }
+
+                    sortShipments(allShipments, count);
+                    
+                    printf("Sorted by delivery time:\n\n");
+                    for (int i = 0; i < count; i++) {
+                        printf("Shipment ID: %d\n", allShipments[i].shipmentId);
+                        printf("Delivery Time: %d days\n", allShipments[i].deliveryTime);
+                        printf("Status: %s\n\n", allShipments[i].isDelivered ? "Delivered" : "Not Delivered");
+                    }
+                    
+                    free(allShipments);
+                } else {
+                    printf("No shipments in the system.\n");
+                }
+                waitForEnter();
+                break;
+            }
+            case 6: {
+                clearScreen();
+                printf("=== Show Delivery Routes ===\n");
+                printRoutingTree(headquarters, 0);
+                waitForEnter();
+                break;
+            }
+            case 0:
+                printf("\nExiting program...\n");
+                break;
+            default:
+                printf("\nInvalid choice! Please try again.");
+                waitForEnter();
+        }
+    } while (choice != 0);
+
+
+    return 0;
+}
+
